@@ -10,3 +10,10 @@ exe/
 
 # Промпт
 Prompt.txt
+
+IGK.spec
+RGB_RT_logo-vertical_main_ru.ico
+RGB_RT_logo-vertical_main_ru.png
+build/
+dist/
+table-f473a3cb-8aac-4d48-a7cf-66c67c8de5ff.xlsx
