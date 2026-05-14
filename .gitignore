@@ -1,0 +1,12 @@
+# Виртуальное окружение
+.venv/
+venv/
+
+# IDE
+.idea/
+
+# EXE
+exe/
+
+# Промпт
+Prompt.txt
