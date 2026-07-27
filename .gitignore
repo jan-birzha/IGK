@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# PyInstaller / Executables
+build/
+dist/
+*.manifest
+*.spec
+
+# IDE / Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary test data
+*.pdf
+*.xlsx
+*.xlsm
+*.xls
+*.png
+*.jpg
+
+# source
+source/
+
+# test
+test/
