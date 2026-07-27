@@ -37,3 +37,6 @@ source/
 
 # test
 test/
+
+# ICO
+*.ico
