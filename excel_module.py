@@ -636,3 +636,339 @@ def run_insert_to_rdo(parent: tk.Misc | None, listbox: tk.Listbox) -> None:
         return
 
     name_process_workbook(target_path, file_names, parent)
+
+
+# ── Новая логика для работы с ДЗО и XML ───────────────────────────────────────
+
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
+
+
+def dzo_select_folder_and_excel(parent: tk.Misc | None = None) -> tuple[str | None, str | None]:
+    """Открывает последовательно диалоги выбора папки с файлами и файла Excel."""
+    folder_path = name_select_folder(parent)
+    if not folder_path:
+        return None, None
+    excel_path = name_select_target_file(parent)
+    if not excel_path:
+        return None, None
+    return folder_path, excel_path
+
+
+def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
+    """
+    Читает Excel файл (.xlsx, .xlsm, .xls) начиная со 2-й строки.
+    Останавливается, если в столбцах A, B, C встречаются пустые ячейки.
+    Фильтрует строки по столбцу I (значение должно начинаться на '40817').
+    Возвращает список кортежей (Col_A, Col_B, Col_D).
+    """
+    ext = os.path.splitext(excel_path)[1].lower()
+    result = []
+
+    # Чтение старого формата .xls через xlrd или COM-объект
+    if ext == ".xls":
+        try:
+            import xlrd
+        except ImportError:
+            raise RuntimeError(
+                "Для работы с файлами .xls требуется библиотека xlrd.\n"
+                "Установите её командой: pip install xlrd"
+            )
+
+        wb = xlrd.open_workbook(excel_path)
+        ws = wb.sheet_by_index(0)
+
+        row = 1  # 0-based индекс (строка 2 в Excel)
+        while row < ws.nrows:
+            val_a = ws.cell_value(row, 0)
+            val_b = ws.cell_value(row, 1)
+            val_c = ws.cell_value(row, 2)
+
+            str_a = _cell_text(val_a)
+            str_b = _cell_text(val_b)
+            str_c = _cell_text(val_c)
+
+            if not str_a or not str_b or not str_c:
+                break
+
+            val_d = ws.cell_value(row, 3)
+            str_d = _cell_text(val_d)
+
+            val_i = ws.cell_value(row, 8)  # Столбец I (индекс 8)
+            str_i = _cell_text(val_i)
+
+            if str_i.startswith("40817"):
+                result.append((str_a, str_b, str_d))
+
+            row += 1
+
+        return result
+
+    # Чтение форматов .xlsx / .xlsm через openpyxl
+    if not HAS_OPENPYXL:
+        raise RuntimeError("Для работы с Excel файлом требуется библиотека openpyxl.")
+
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    ws = wb.active
+
+    row = 2
+    while True:
+        val_a = ws.cell(row=row, column=1).value
+        val_b = ws.cell(row=row, column=2).value
+        val_c = ws.cell(row=row, column=3).value
+
+        if val_a is None or val_b is None or val_c is None:
+            break
+
+        str_a = _cell_text(val_a)
+        str_b = _cell_text(val_b)
+        str_c = _cell_text(val_c)
+
+        if not str_a or not str_b or not str_c:
+            break
+
+        val_d = ws.cell(row=row, column=4).value
+        str_d = _cell_text(val_d)
+
+        val_i = ws.cell(row=row, column=9).value
+        str_i = _cell_text(val_i)
+
+        if str_i.startswith("40817"):
+            result.append((str_a, str_b, str_d))
+
+        row += 1
+
+    wb.close()
+    return result
+
+
+def extract_match_tokens(filename: str) -> list[str]:
+    """Разбивает имя файла по символу '_' для сопоставления со столбцом B."""
+    name_without_ext = os.path.splitext(filename)[0]
+    return [token.strip() for token in name_without_ext.split("_") if token.strip()]
+
+
+def match_dzo_data(excel_rows: list[tuple[str, str, str]], filenames: list[str]) -> list[tuple[str, str, str, str]]:
+    """
+    Сопоставляет данные из Excel с именами файлов по совпадению столбца B и части имени файла.
+    Возвращает список строк таблицы вида: (A, B, D, Filename)
+    """
+    matched = []
+    for filename in filenames:
+        tokens = extract_match_tokens(filename)
+        found_row = None
+        for row in excel_rows:
+            col_b = row[1]
+            if col_b in tokens:
+                found_row = row
+                break
+        if found_row:
+            matched.append((found_row[0], found_row[1], found_row[2], filename))
+        else:
+            matched.append(("", "", "", filename))
+    return matched
+
+
+def run_dzo_select_folder_and_process(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
+    """Обработчик кнопки 'Выбор папки для РДО' на вкладке ДЗО."""
+    folder_path, excel_path = dzo_select_folder_and_excel(parent)
+    if not folder_path or not excel_path:
+        return
+
+    try:
+        filenames = name_list_filenames_recursive(folder_path)
+        if not filenames:
+            messagebox.showwarning("Внимание", "В выбранной папке нет файлов.", parent=dialog_parent(parent))
+            return
+
+        excel_rows = read_dzo_excel_data(excel_path)
+        matched_data = match_dzo_data(excel_rows, filenames)
+
+        # Очистка и заполнение таблицы РДО
+        for item in tree.get_children():
+            tree.delete(item)
+
+        for row in matched_data:
+            tree.insert("", tk.END, values=row)
+
+    except Exception as exc:
+        messagebox.showerror("Ошибка", f"Не удалось обработать файлы:\n{exc}", parent=dialog_parent(parent))
+
+
+def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
+    """
+    Обработчик кнопки 'Перенести список в РДО (Excel)'.
+    Переносит A -> I15, B -> J15, D -> K15 и названия файлов в стандартную колонку.
+    """
+    if not HAS_WIN32:
+        messagebox.showerror(
+            "Ошибка",
+            "Для работы с Excel требуется Windows, Microsoft Excel и pywin32.",
+            parent=dialog_parent(parent),
+        )
+        return
+
+    items = tree.get_children()
+    if not items:
+        messagebox.showwarning("Внимание", "Раздел РДО пуст. Сначала выберите папку и файл Excel.",
+                               parent=dialog_parent(parent))
+        return
+
+    target_path = name_select_target_file(parent)
+    if not target_path:
+        return
+
+    rows_data = [tree.item(item)["values"] for item in items]
+    data_count = len(rows_data)
+
+    proceed = messagebox.askyesno(
+        "Подтверждение",
+        f"Будет перенесено {data_count} строк в целевой Excel файл.\nПродолжить?",
+        parent=dialog_parent(parent),
+    )
+    if not proceed:
+        return
+
+    pythoncom.CoInitialize()
+    excel = None
+    workbook = None
+
+    try:
+        excel = win32.DispatchEx("Excel.Application")
+        _configure_excel_fast(excel)
+        workbook = _open_workbook(excel, target_path)
+        ws = workbook.Worksheets(1)
+
+        filename_col = _find_filename_column(ws)
+
+        # Подготовка строк при необходимости
+        if data_count >= 2:
+            insert_count = data_count - 1
+            source_row = ws.Rows(DATA_START_ROW)
+            target_rows = ws.Rows(f"{DATA_START_ROW + 1}:{DATA_START_ROW + insert_count}")
+            source_row.Copy()
+            target_rows.Insert(Shift=XL_SHIFT_DOWN)
+            excel.CutCopyMode = False
+
+        # Заполнение данных:
+        # Col A -> I (9), Col B -> J (10), Col D -> K (11)
+        # Filename -> filename_col
+        for idx, row in enumerate(rows_data):
+            r = DATA_START_ROW + idx
+            val_a, val_b, val_d, fname = row[0], row[1], row[2], row[3]
+
+            _set_cell_display_value(ws, r, 9, str(val_a))  # Столбец I
+            _set_cell_display_value(ws, r, 10, str(val_b))  # Столбец J
+            _set_cell_display_value(ws, r, 11, str(val_d))  # Столбец K
+            _set_cell_display_value(ws, r, filename_col, str(fname))
+
+        workbook.Save()
+        messagebox.showinfo("Готово", f"Данные успешно перенесены в РДО!\nПеренесено строк: {data_count}",
+                            parent=dialog_parent(parent))
+
+    except Exception as exc:
+        messagebox.showerror("Ошибка", f"Произошла ошибка при перенесении данных:\n{exc}",
+                             parent=dialog_parent(parent))
+    finally:
+        if workbook is not None:
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if excel is not None:
+            try:
+                _restore_excel_defaults(excel)
+                excel.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
+    """Обработчик кнопки 'Конвертация excel в xml' с поддержкой .xlsx, .xlsm и .xls."""
+    excel_path = filedialog.askopenfilename(
+        parent=dialog_parent(parent),
+        title="Выберите файл Excel для конвертации в XML",
+        filetypes=[("Excel Files", "*.xlsx *.xlsm *.xls")],
+    )
+    if not excel_path:
+        return
+
+    ext = os.path.splitext(excel_path)[1].lower()
+    root = ET.Element("WorkbookData")
+    root.set("source", os.path.basename(excel_path))
+
+    try:
+        if ext == ".xls":
+            # Чтение формата .xls через xlrd
+            try:
+                import xlrd
+            except ImportError:
+                messagebox.showerror(
+                    "Ошибка",
+                    "Для чтения файлов .xls требуется библиотека xlrd.\nУстановите её командой: pip install xlrd",
+                    parent=dialog_parent(parent),
+                )
+                return
+
+            wb = xlrd.open_workbook(excel_path)
+            ws = wb.sheet_by_index(0)
+
+            for row_idx in range(ws.nrows):
+                row_vals = [ws.cell_value(row_idx, col_idx) for col_idx in range(ws.ncols)]
+                if not any(row_vals):
+                    continue
+                row_elem = ET.SubElement(root, "Row")
+                for cell_idx, val in enumerate(row_vals, start=1):
+                    cell_elem = ET.SubElement(row_elem, f"Cell_{cell_idx}")
+                    cell_elem.text = "" if val is None or val == "" else str(val)
+
+        else:
+            # Чтение форматов .xlsx / .xlsm через openpyxl
+            if not HAS_OPENPYXL:
+                messagebox.showerror(
+                    "Ошибка",
+                    "Для конвертации требуется библиотека openpyxl.",
+                    parent=dialog_parent(parent),
+                )
+                return
+
+            wb = openpyxl.load_workbook(excel_path, data_only=True)
+            ws = wb.active
+
+            for row in ws.iter_rows(values_only=True):
+                if not any(row):
+                    continue
+                row_elem = ET.SubElement(root, "Row")
+                for cell_idx, val in enumerate(row, start=1):
+                    cell_elem = ET.SubElement(row_elem, f"Cell_{cell_idx}")
+                    cell_elem.text = "" if val is None else str(val)
+
+            wb.close()
+
+        # Форматирование в красивый XML (pretty print)
+        xml_str = minidom.parseString(ET.tostring(root, encoding="utf-8")).toprettyxml(indent="  ")
+
+        save_path = filedialog.asksaveasfilename(
+            parent=dialog_parent(parent),
+            title="Сохранить файл XML",
+            defaultextension=".xml",
+            filetypes=[("XML Files", "*.xml")],
+            initialfile=os.path.splitext(os.path.basename(excel_path))[0] + ".xml",
+        )
+
+        if save_path:
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write(xml_str)
+            messagebox.showinfo(
+                "Успех",
+                f"Файл успешно сконвертирован и сохранен:\n{save_path}",
+                parent=dialog_parent(parent),
+            )
+
+    except Exception as exc:
+        messagebox.showerror(
+            "Ошибка",
+            f"Ошибка при конвертации в XML:\n{exc}",
+            parent=dialog_parent(parent),
+        )

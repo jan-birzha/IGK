@@ -8,10 +8,16 @@ from typing import Callable
 
 from config import UI
 from excel_module import (
-    run_insert_to_rdo, run_name_array, run_name_pick_folder_and_list
+    run_convert_excel_to_xml,
+    run_dzo_insert_to_rdo,
+    run_dzo_select_folder_and_process,
+    run_insert_to_rdo,
+    run_name_array,
+    run_name_pick_folder_and_list,
 )
+
 from igk_module import run_igk, run_igk_array
-from ui.widgets import ModernNeonCardButton, build_filename_section
+from ui.widgets import (ModernNeonCardButton, build_dzo_rdo_table_section, build_filename_section)
 
 
 class IGKNameApp:
@@ -42,7 +48,7 @@ class IGKNameApp:
 
     def _center_window(self) -> None:
         self.root.update_idletasks()
-        w, h = 840, 640
+        w, h = 1000, 850
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         x = max(0, (sw - w) // 2)
@@ -67,6 +73,7 @@ class IGKNameApp:
         self.menu_buttons = []
         self._create_sidebar_btn(sidebar, "Работа с одним пакетом", 0, pady=(10, 4))
         self._create_sidebar_btn(sidebar, "Работа с массивом пакетов", 1, pady=4)
+        self._create_sidebar_btn(sidebar, "Работа с одним пакетом ДЗО", 2, pady=4)
 
         footer_lbl = tk.Label(sidebar, text="Версия 2.2 (Modern UI)", font=UI["font_footer"], bg=UI["bg_sidebar"], fg=UI["muted"])
         footer_lbl.pack(side=tk.BOTTOM, pady=20)
@@ -78,12 +85,15 @@ class IGKNameApp:
         self.pages = []
         self.page_single = tk.Frame(self.main_content, bg=UI["bg_main"])
         self.page_array = tk.Frame(self.main_content, bg=UI["bg_main"])
+        self.page_dzo = tk.Frame(self.main_content, bg=UI["bg_main"])
 
         self.pages.append(self.page_single)
         self.pages.append(self.page_array)
+        self.pages.append(self.page_dzo)
 
         self._build_single_page(self.page_single)
         self._build_array_page(self.page_array)
+        self._build_dzo_page(self.page_dzo)
 
         self._show_page(0)
 
@@ -179,6 +189,58 @@ class IGKNameApp:
             icon="🗃",
             command=lambda: self._launch(run_name_array),
         ).pack(fill=tk.X, pady=(0, 8))
+
+    def _build_dzo_page(self, parent: tk.Widget) -> None:
+        self._build_header_section(parent, "Работа с одним пакетом ДЗО", "Инструменты для обработки пакетов ДЗО")
+
+        top_cards = tk.Frame(parent, bg=UI["bg_main"])
+        top_cards.pack(fill=tk.X, pady=(4, 2))
+
+        # Кнопка 1: Вставка ИГК в файлы
+        ModernNeonCardButton(
+            top_cards,
+            text="Вставка ИГК в файлы",
+            subtitle="Добавить номер ИГК в выбранные файлы (PDF, JPEG, PNG и др.)",
+            icon="📄",
+            command=lambda: self._launch(run_igk),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Кнопка 2: Выбор папки для РДО
+        ModernNeonCardButton(
+            top_cards,
+            text="Выбор папки для РДО",
+            subtitle="Выбрать папку с файлами и Excel-файл для отбора по лицевому счету (40817...)",
+            icon="📁",
+            command=lambda: self._launch(
+                lambda p: run_dzo_select_folder_and_process(p, self.dzo_tree)
+            ),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Раздел с названием "РДО" (Таблица)
+        self.dzo_tree = build_dzo_rdo_table_section(parent)
+
+        bottom_cards = tk.Frame(parent, bg=UI["bg_main"])
+        bottom_cards.pack(fill=tk.X, pady=(4, 0))
+
+        # Кнопка 3: Перенести список в РДО (Excel)
+        ModernNeonCardButton(
+            bottom_cards,
+            text="Перенести список в РДО (Excel)",
+            subtitle="Экспортировать сопоставленные данные (A->I15, B->J15, D->K15) в Excel",
+            icon="📊",
+            command=lambda: self._launch(
+                lambda p: run_dzo_insert_to_rdo(p, self.dzo_tree)
+            ),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Кнопка 4: Конвертация excel в xml
+        ModernNeonCardButton(
+            bottom_cards,
+            text="Конвертация excel в xml",
+            subtitle="Преобразовать выбранный Excel файл в формат XML",
+            icon="⚙",
+            command=lambda: self._launch(run_convert_excel_to_xml),
+        ).pack(fill=tk.X)
 
     def _launch(self, handler: Callable[[tk.Misc | None], None]) -> None:
         self.root.withdraw()
