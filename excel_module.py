@@ -1008,24 +1008,74 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
         pythoncom.CoUninitialize()
 
 
+# ==============================================================================
+# КОНВЕРТАЦИЯ EXCEL В XML (ОБНОВЛЕННАЯ ВЕРСИЯ 2.0)
+# ==============================================================================
+
+def _format_xml_date(val: object) -> str:
+    """Преобразует дату из Excel в формат XML: YYYY-MM-DD."""
+    if val is None:
+        return ""
+    if isinstance(val, (dt.datetime, dt.date)):
+        return val.strftime("%Y-%m-%d")
+    text = str(val).strip()
+    # Если дата формата ДД.ММ.ГГГГ
+    if len(text) >= 10 and text[2] == '.' and text[5] == '.':
+        parts = text[:10].split('.')
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    # Если дата формата ГГГГ-ММ-ДД
+    if len(text) >= 10 and text[4] == '-' and text[7] == '-':
+        return text[:10]
+    return text
+
+
+def _format_xml_sum(val: object) -> str:
+    """Преобразует сумму в числовой формат XML: 0.00."""
+    if val is None or str(val).strip() == "":
+        return "0.00"
+    is_num, float_val = _is_numeric_value(str(val).replace(" ", "").replace("\xa0", ""))
+    if is_num:
+        return f"{float_val:.2f}"
+    return str(val).strip()
+
+
 def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
     """
-    Конвертирует Excel (.xlsx, .xlsm, .xls) в формат XML по структуре TSE_0401060_D07.
+    Выполняет конвертацию Excel-файла в XML по выбранному шаблону.
     """
+    # 1. Шаг 1: Выбор XML-шаблона
+    xml_template_path = filedialog.askopenfilename(
+        parent=dialog_parent(parent),
+        title="Шаг 1 из 3: Выберите файл шаблона XML",
+        filetypes=[("XML Files", "*.xml")],
+    )
+    if not xml_template_path:
+        return
+
+    # 2. Шаг 2: Выбор исходного Excel-файла
     excel_path = filedialog.askopenfilename(
         parent=dialog_parent(parent),
-        title="Выберите файл Excel для конвертации в XML",
+        title="Шаг 2 из 3: Выберите Excel файл с данными",
         filetypes=[("Excel Files", "*.xlsx *.xlsm *.xls")],
     )
     if not excel_path:
         return
 
+    # 3. Шаг 3: Выбор пути для сохранения результата
+    save_xml_path = filedialog.asksaveasfilename(
+        parent=dialog_parent(parent),
+        title="Шаг 3 из 3: Укажите место для сохранения готового XML файла",
+        defaultextension=".xml",
+        filetypes=[("XML Files", "*.xml")],
+        initialfile="РДО.xml"
+    )
+    if not save_xml_path:
+        return
+
     ext = os.path.splitext(excel_path)[1].lower()
+    excel_rows = []
 
-    # Считывание данных из Excel
-    rows_data = []
-    header_info = {}
-
+    # --- Чтение данных из Excel начиная со строки 15 ---
     try:
         if ext == ".xls":
             try:
@@ -1041,26 +1091,33 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
             wb = xlrd.open_workbook(excel_path)
             ws = wb.sheet_by_index(0)
 
-            header_info["L6"] = _cell_text(ws.cell_value(5, 11))  # Строка 6, Столбец L
-            header_info["L7"] = _cell_text(ws.cell_value(6, 11))  # Строка 7, Столбец L
-
             for r in range(DATA_START_ROW - 1, ws.nrows):
-                val_a = ws.cell_value(r, 0)
-                if not _cell_text(val_a):
+                val_b = ws.cell_value(r, 1)  # B15 (DocDateDB)
+                val_c = ws.cell_value(r, 2)  # C15:D15 (DocNumDB)
+                val_e = ws.cell_value(r, 4)  # E15:F15 (ContractID)
+
+                # Проверка конца таблицы (если ключевые поля пустые)
+                if not _cell_text(val_b) and not _cell_text(val_c) and not _cell_text(val_e):
                     break
 
-                row_dict = {
-                    "num": _cell_text(val_a),
-                    "doc_date": _format_excel_date(ws.cell_value(r, 1)),
-                    "doc_num": _cell_text(ws.cell_value(r, 2)),
-                    "igk": _cell_text(ws.cell_value(r, 4)),
-                    "date_i": _format_excel_date(ws.cell_value(r, 8)),
-                    "text_j": _cell_text(ws.cell_value(r, 9)),
-                    "sum_k": ws.cell_value(r, 10),
-                }
-                rows_data.append(row_dict)
+                val_sum_ret_raw = ws.cell_value(r, 11)  # L15 (Столбец L, индекс 11)
+                is_num, float_sum_ret = _is_numeric_value(val_sum_ret_raw)
 
-        else:
+                row_item = {
+                    "ContractID": _cell_text(val_e),  # E15:F15
+                    "DocDateDB": _format_xml_date(val_b),  # B15
+                    "DocNumDB": _cell_text(val_c),  # C15:D15
+                    "ViewC": _cell_text(ws.cell_value(r, 6)),  # G15:H15
+                    "DocNum": _cell_text(ws.cell_value(r, 8)),  # I15
+                    "DocDate": _format_xml_date(ws.cell_value(r, 9)),  # J15
+                    "Sum": _format_xml_sum(ws.cell_value(r, 10)),  # K15
+                    "SumRet": _format_xml_sum(val_sum_ret_raw),  # L15
+                    "SumRetFloat": float_sum_ret if is_num else 0.0,
+                    "ScanCopy": _cell_text(ws.cell_value(r, 17))  # R15 (Столбец R, индекс 17)
+                }
+                excel_rows.append(row_item)
+
+        else:  # .xlsx, .xlsm
             if not HAS_OPENPYXL:
                 messagebox.showerror(
                     "Ошибка",
@@ -1072,187 +1129,131 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
             wb = openpyxl.load_workbook(excel_path, data_only=True)
             ws = wb.active
 
-            header_info["L6"] = _cell_text(ws.cell(row=6, column=12).value)
-            header_info["L7"] = _cell_text(ws.cell(row=7, column=12).value)
-
             r = DATA_START_ROW
             while True:
-                val_a = ws.cell(row=r, column=1).value
-                if val_a is None or not _cell_text(val_a):
+                val_b = ws.cell(row=r, column=2).value  # B15
+                val_c = ws.cell(row=r, column=3).value  # C15:D15
+                val_e = ws.cell(row=r, column=5).value  # E15:F15
+
+                if val_b is None and val_c is None and val_e is None:
+                    break
+                if not _cell_text(val_b) and not _cell_text(val_c) and not _cell_text(val_e):
                     break
 
-                row_dict = {
-                    "num": _cell_text(val_a),
-                    "doc_date": _format_excel_date(ws.cell(row=r, column=2).value),
-                    "doc_num": _cell_text(ws.cell(row=r, column=3).value),
-                    "igk": _cell_text(ws.cell(row=r, column=5).value),
-                    "date_i": _format_excel_date(ws.cell(row=r, column=9).value),
-                    "text_j": _cell_text(ws.cell(row=r, column=10).value),
-                    "sum_k": ws.cell(row=r, column=11).value,
+                val_sum_ret_raw = ws.cell(row=r, column=12).value  # L15 (Столбец L = 12)
+                is_num, float_sum_ret = _is_numeric_value(val_sum_ret_raw)
+
+                row_item = {
+                    "ContractID": _cell_text(val_e),  # E15:F15
+                    "DocDateDB": _format_xml_date(val_b),  # B15
+                    "DocNumDB": _cell_text(val_c),  # C15:D15
+                    "ViewC": _cell_text(ws.cell(row=r, column=7).value),  # G15:H15
+                    "DocNum": _cell_text(ws.cell(row=r, column=9).value),  # I15
+                    "DocDate": _format_xml_date(ws.cell(row=r, column=10).value),  # J15
+                    "Sum": _format_xml_sum(ws.cell(row=r, column=11).value),  # K15
+                    "SumRet": _format_xml_sum(val_sum_ret_raw),  # L15
+                    "SumRetFloat": float_sum_ret if is_num else 0.0,
+                    "ScanCopy": _cell_text(ws.cell(row=r, column=18).value)  # R15 (Столбец R = 18)
                 }
-                rows_data.append(row_dict)
+                excel_rows.append(row_item)
                 r += 1
 
             wb.close()
 
     except Exception as exc:
-        messagebox.showerror("Ошибка", f"Ошибка чтения файла Excel:\n{exc}", parent=dialog_parent(parent))
+        messagebox.showerror("Ошибка", f"Не удалось прочитать данные из Excel:\n{exc}", parent=dialog_parent(parent))
         return
 
-    if not rows_data:
-        messagebox.showwarning("Внимание", "В Excel-файле не найдены данные начиная со строки 15.", parent=dialog_parent(parent))
+    if not excel_rows:
+        messagebox.showwarning("Внимание", "В выбранном Excel-файле нет данных начиная со строки 15.",
+                               parent=dialog_parent(parent))
         return
 
-    # Расчет общей суммы
-    total_sum = 0.0
-    for item in rows_data:
-        is_num, val_float = _is_numeric_value(str(item["sum_k"]).replace(" ", "").replace("\xa0", ""))
-        if is_num:
-            total_sum += val_float
+    # --- Чтение шаблона ---
+    try:
+        with open(xml_template_path, "r", encoding="utf-8") as f:
+            template_content = f.read()
+    except UnicodeDecodeError:
+        with open(xml_template_path, "r", encoding="windows-1251") as f:
+            template_content = f.read()
+    except Exception as exc:
+        messagebox.showerror("Ошибка", f"Не удалось прочитать шаблон XML:\n{exc}", parent=dialog_parent(parent))
+        return
 
-    # Построение XML структуры по шаблону TSE_0401060_D07
-    ET.register_namespace("self", "http://www.roskazna.ru/eb/domain/TSE_0401060_D07/formular")
-    root = ET.Element("{http://www.roskazna.ru/eb/domain/TSE_0401060_D07/formular}TSE_0401060_D07")
-    root.set("metaType", "formular")
-    root.set("Version", "9.0")
+    # 1. Доработка: Сохранение оригинальной строки <TranscriptPP_PayPurpose> из шаблона
+    import re
+    pay_purpose_match = re.search(r"<TranscriptPP_PayPurpose>(.*?)</TranscriptPP_PayPurpose>", template_content, re.DOTALL)
+    if pay_purpose_match:
+        pay_purpose_str = pay_purpose_match.group(0)
+    else:
+        pay_purpose_str = "<TranscriptPP_PayPurpose>Заявка на кассовый расход</TranscriptPP_PayPurpose>"
 
-    today_str = dt.date.today().strftime("%Y-%m-%d")
+    # Поиск конца заголовка (до раздела <AnalyticCodePay>)
+    tag_target = "</AnalyticCodePay>"
+    pos = template_content.find(tag_target)
+    if pos != -1:
+        header_part = template_content[:pos + len(tag_target)]
+    else:
+        tag_target = "<AnalyticCodePay"
+        pos = template_content.find(tag_target)
+        if pos != -1:
+            end_pos = template_content.find(">", pos)
+            header_part = template_content[:end_pos + 1]
+        else:
+            messagebox.showerror("Ошибка", "В XML-шаблоне не найден тег <AnalyticCodePay>.",
+                                 parent=dialog_parent(parent))
+            return
 
-    # Основные реквизиты
-    doc_num_elem = ET.SubElement(root, "BasicRequisites_DocNum")
-    doc_num_elem.text = "1"
+    # --- Генерация элементов <Tab_ReqODB_D07_ITEM> ---
+    xml_items = []
+    for idx, row in enumerate(excel_rows, start=1):
+        view_c_val = row["ViewC"]
+        view_c_str = f'<ViewC code="7">{view_c_val}</ViewC>' if view_c_val else '<ViewC code="7">Платежное поручение</ViewC>'
 
-    doc_date_elem = ET.SubElement(root, "BasicRequisites_DocDate")
-    doc_date_elem.text = today_str
+        # 2. Доработка: ScanCopy включается в конец раздела <Tab_ReqODB_D07_ITEM>
+        scan_copy_val = row["ScanCopy"]
+        scan_copy_tag = f'\n            <ScanCopy attachFileName="{scan_copy_val}"/>' if scan_copy_val else ""
 
-    pay_sum_elem = ET.SubElement(root, "BasicRequisites_PaySum")
-    pay_sum_elem.text = f"{total_sum:.2f}"
+        item_xml = f"""        <Tab_ReqODB_D07_ITEM>
+            <ContractID>{row['ContractID']}</ContractID>
+            <NumPP>{idx}</NumPP>
+            <DocDateDB>{row['DocDateDB']}</DocDateDB>
+            <DocNumDB>{row['DocNumDB']}</DocNumDB>
+            {view_c_str}
+            <DocNum>{row['DocNum']}</DocNum>
+            <DocDate>{row['DocDate']}</DocDate>
+            <Sum>{row['Sum']}</Sum>
+            <SumRet>{row['SumRet']}</SumRet>
+            <SumNDS>0.00</SumNDS>{scan_copy_tag}
+        </Tab_ReqODB_D07_ITEM>"""
+        xml_items.append(item_xml)
 
-    pay_view_elem = ET.SubElement(root, "BasicRequisites_PayView")
-    pay_view_elem.set("code", "0")
-    pay_view_elem.set("value", "Пусто")
+    tab_req_odb_content = "\n" + "\n".join(xml_items) + "\n    "
 
-    oper_type = ET.SubElement(root, "AdditionalInfo_OperType")
-    oper_type.text = "01"
+    # 3. Доработка: Подсчет суммы всех чисел столбца L (SumRet)
+    total_kbk_sum = sum(row["SumRetFloat"] for row in excel_rows)
+    sum_kbk_total_str = f"{total_kbk_sum:.2f}"
 
-    pay_order = ET.SubElement(root, "AdditionalInfo_PayOrder")
-    pay_order.text = "5"
+    # Сборка итогового XML
+    final_xml = f"""{header_part}
+</TSE_Tab0401060_ITEM></TSE_Tab0401060><BPR>false</BPR>
+<RegistryDocsBaseAttechmentSix_RDOuseSign>true</RegistryDocsBaseAttechmentSix_RDOuseSign>
+    <RegistryDocsBaseAttechmentSix_RDONum>1</RegistryDocsBaseAttechmentSix_RDONum>
+    <RegistryDocsBaseAttechmentSix_RDODate>{dt.date.today().strftime("%Y-%m-%d")}</RegistryDocsBaseAttechmentSix_RDODate>
+    <Tab_ReqODB_D07>{tab_req_odb_content}</Tab_ReqODB_D07>
+{pay_purpose_str}
+<SumKBKTotal>{sum_kbk_total_str}</SumKBKTotal>
+<SumNDSTotal>0.00</SumNDSTotal>
+</self:TSE_0401060_D07>"""
 
-    # Данные Плательщика и Получателя
-    first_igk = rows_data[0]["igk"] if rows_data else ""
-    first_doc_num = rows_data[0]["doc_num"] if rows_data else ""
-    first_doc_date = rows_data[0]["doc_date"] if rows_data else ""
-
-    fields_payer = [
-        ("PayerAndRecipient_Payer_INN", "5027330277"),
-        ("PayerAndRecipient_Payer_KPP", "502701001"),
-        ("PayerAndRecipient_Payer_Code", "460ЩL1Э2"),
-        ("PayerAndRecipient_Payer_PersonalAcc", header_info.get("L6") or "711ЩL1Э2001"),
-        ("PayerAndRecipient_Payer_Name", 'УФК ПО Г. МОСКВЕ (ООО "ВЕБПРО")'),
-        ("PayerAndRecipient_Payer_CheckAcc", "03215643000000017301"),
-        ("PayerAndRecipient_Payer_BIK", "004525988"),
-        ("PayerAndRecipient_Payer_BankName", "ОКЦ № 1 ГУ Банка России по ЦФО//УФК ПО Г. МОСКВЕ, г Москва"),
-        ("PayerAndRecipient_Payer_CorrAcc", "40102810545370000003"),
-        ("PayerAndRecipient_Recip_INN", "5027330277"),
-        ("PayerAndRecipient_Recip_KPP", "502701001"),
-        ("PayerAndRecipient_Recip_Code", "460ЩL1Э2"),
-        ("PayerAndRecipient_Recip_Name", 'ООО "ВЕБПРО"'),
-        ("PayerAndRecipient_Recip_CheckAcc", "40702810303800090663"),
-        ("PayerAndRecipient_Recip_BIK", "044525187"),
-        ("PayerAndRecipient_Recip_BankName", "Банк ВТБ (ПАО)"),
-        ("PayerAndRecipient_Recip_CorrAcc", "30101810700000000187"),
-        ("TAX_UIN", first_igk),
-        ("TranscriptPP_TransuseSign", "false"),
-        ("TranscriptPP_ReturnSign", "false"),
-    ]
-
-    for tag_name, val in fields_payer:
-        el = ET.SubElement(root, tag_name)
-        el.text = val
-
-    # Табличная часть
-    tab_elem = ET.SubElement(root, "TSE_Tab0401060")
-
-    for idx, row in enumerate(rows_data, start=1):
-        item_elem = ET.SubElement(tab_elem, "TSE_Tab0401060_ITEM")
-
-        cid = ET.SubElement(item_elem, "ContractID")
-        cid.text = row["igk"]
-
-        num_pp = ET.SubElement(item_elem, "NumPP")
-        num_pp.text = str(idx)
-
-        view_c = ET.SubElement(item_elem, "ViewC")
-        view_c.set("value", "Договор")
-        view_c.set("code", "0")
-
-        # Форматирование даты в ГГГГ-ММ-ДД для XML
-        raw_date = row["doc_date"]
-        formatted_xml_date = raw_date
-        if len(raw_date) == 10 and raw_date[2] == "." and raw_date[5] == ".":
-            parts = raw_date.split(".")
-            formatted_xml_date = f"{parts[2]}-{parts[1]}-{parts[0]}"
-
-        ddate = ET.SubElement(item_elem, "DocDate")
-        ddate.text = formatted_xml_date
-
-        dnum = ET.SubElement(item_elem, "DocNum")
-        dnum.text = row["doc_num"]
-
-        cop = ET.SubElement(item_elem, "CodeObjectPayer")
-        cop.text = "9100"
-
-        dcop = ET.SubElement(item_elem, "DetCodeObjectPayer")
-        dcop.text = "9100001"
-
-        is_num, val_float = _is_numeric_value(str(row["sum_k"]).replace(" ", "").replace("\xa0", ""))
-        sum_val = f"{val_float:.2f}" if is_num else "0.00"
-
-        s_elem = ET.SubElement(item_elem, "Sum")
-        s_elem.text = sum_val
-
-        s_nds = ET.SubElement(item_elem, "SumNDS")
-        s_nds.text = "0.00"
-
-        acp = ET.SubElement(item_elem, "AnalyticCodePay")
-        acp.text = header_info.get("L7") or "26029394"
-
-    # Завершающие теги
-    bpr = ET.SubElement(root, "BPR")
-    bpr.text = "false"
-
-    rdo_sign = ET.SubElement(root, "RegistryDocsBaseAttechmentSix_RDOuseSign")
-    rdo_sign.text = "false"
-
-    l6_val = header_info.get("L6") or "711ЩL1Э2001"
-    purpose_text = f"({l6_val};9100001) Договор {first_doc_num} от {first_doc_date} НДС0.00"
-    pay_purpose = ET.SubElement(root, "TranscriptPP_PayPurpose")
-    pay_purpose.text = purpose_text
-
-    sum_kbk = ET.SubElement(root, "SumKBKTotal")
-    sum_kbk.text = f"{total_sum:.2f}"
-
-    sum_nds_tot = ET.SubElement(root, "SumNDSTotal")
-    sum_nds_tot.text = "0.00"
-
-    # Форматирование XML
-    xml_bytes = ET.tostring(root, encoding="utf-8")
-    dom = minidom.parseString(xml_bytes)
-    xml_pretty_str = dom.toprettyxml(indent="", newl="")
-
-    save_path = filedialog.asksaveasfilename(
-        parent=dialog_parent(parent),
-        title="Сохранить файл XML",
-        defaultextension=".xml",
-        filetypes=[("XML Files", "*.xml")],
-        initialfile=os.path.splitext(os.path.basename(excel_path))[0] + ".xml",
-    )
-
-    if save_path:
-        with open(save_path, "w", encoding="utf-8") as f:
-            f.write(xml_pretty_str)
+    # --- Сохранение в файл ---
+    try:
+        with open(save_xml_path, "w", encoding="utf-8") as f:
+            f.write(final_xml)
         messagebox.showinfo(
-            "Успех",
-            f"Файл успешно сконвертирован в формат TSE_0401060_D07 и сохранен:\n{save_path}",
-            parent=dialog_parent(parent),
+            "Успешно",
+            f"Конвертация завершена!\n\nФайл сохранен:\n{save_xml_path}\nОбработано строк: {len(excel_rows)}",
+            parent=dialog_parent(parent)
         )
+    except Exception as exc:
+        messagebox.showerror("Ошибка", f"Не удалось сохранить XML файл:\n{exc}", parent=dialog_parent(parent))
