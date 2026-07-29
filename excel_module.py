@@ -946,8 +946,8 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
             r = DATA_START_ROW + idx
             val_a, val_b, val_d, fname = row[0], row[1], row[2], row[3]
 
-            _set_cell_display_value(ws, r, 9, str(val_a))  # Столбец I (Дата)
-            _set_cell_display_value(ws, r, 10, str(val_b))  # Столбец J (Текст)
+            _set_cell_display_value(ws, r, 9, str(val_b))  # Столбец I (Дата)
+            _set_cell_display_value(ws, r, 10, str(val_a))  # Столбец J (Текст)
 
             # --- ЗАПИСЬ СУММЫ В ЧИСЛОВОМ ФОРМАТЕ (Столбец K / 11) ---
             cell_k = ws.Cells(r, 11)
@@ -1009,7 +1009,9 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
 
 
 def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
-    """Обработчик кнопки 'Конвертация excel в xml' с поддержкой .xlsx, .xlsm и .xls."""
+    """
+    Конвертирует Excel (.xlsx, .xlsm, .xls) в формат XML по структуре TSE_0401060_D07.
+    """
     excel_path = filedialog.askopenfilename(
         parent=dialog_parent(parent),
         title="Выберите файл Excel для конвертации в XML",
@@ -1019,18 +1021,19 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
         return
 
     ext = os.path.splitext(excel_path)[1].lower()
-    root = ET.Element("WorkbookData")
-    root.set("source", os.path.basename(excel_path))
+
+    # Считывание данных из Excel
+    rows_data = []
+    header_info = {}
 
     try:
         if ext == ".xls":
-            # Чтение формата .xls через xlrd
             try:
                 import xlrd
             except ImportError:
                 messagebox.showerror(
                     "Ошибка",
-                    "Для чтения файлов .xls требуется библиотека xlrd.\nУстановите её командой: pip install xlrd",
+                    "Для чтения файлов .xls требуется библиотека xlrd.\nУстановите её: pip install xlrd",
                     parent=dialog_parent(parent),
                 )
                 return
@@ -1038,21 +1041,30 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
             wb = xlrd.open_workbook(excel_path)
             ws = wb.sheet_by_index(0)
 
-            for row_idx in range(ws.nrows):
-                row_vals = [ws.cell_value(row_idx, col_idx) for col_idx in range(ws.ncols)]
-                if not any(row_vals):
-                    continue
-                row_elem = ET.SubElement(root, "Row")
-                for cell_idx, val in enumerate(row_vals, start=1):
-                    cell_elem = ET.SubElement(row_elem, f"Cell_{cell_idx}")
-                    cell_elem.text = "" if val is None or val == "" else str(val)
+            header_info["L6"] = _cell_text(ws.cell_value(5, 11))  # Строка 6, Столбец L
+            header_info["L7"] = _cell_text(ws.cell_value(6, 11))  # Строка 7, Столбец L
+
+            for r in range(DATA_START_ROW - 1, ws.nrows):
+                val_a = ws.cell_value(r, 0)
+                if not _cell_text(val_a):
+                    break
+
+                row_dict = {
+                    "num": _cell_text(val_a),
+                    "doc_date": _format_excel_date(ws.cell_value(r, 1)),
+                    "doc_num": _cell_text(ws.cell_value(r, 2)),
+                    "igk": _cell_text(ws.cell_value(r, 4)),
+                    "date_i": _format_excel_date(ws.cell_value(r, 8)),
+                    "text_j": _cell_text(ws.cell_value(r, 9)),
+                    "sum_k": ws.cell_value(r, 10),
+                }
+                rows_data.append(row_dict)
 
         else:
-            # Чтение форматов .xlsx / .xlsm через openpyxl
             if not HAS_OPENPYXL:
                 messagebox.showerror(
                     "Ошибка",
-                    "Для конвертации требуется библиотека openpyxl.",
+                    "Для работы с Excel файлом требуется библиотека openpyxl.",
                     parent=dialog_parent(parent),
                 )
                 return
@@ -1060,39 +1072,187 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
             wb = openpyxl.load_workbook(excel_path, data_only=True)
             ws = wb.active
 
-            for row in ws.iter_rows(values_only=True):
-                if not any(row):
-                    continue
-                row_elem = ET.SubElement(root, "Row")
-                for cell_idx, val in enumerate(row, start=1):
-                    cell_elem = ET.SubElement(row_elem, f"Cell_{cell_idx}")
-                    cell_elem.text = "" if val is None else str(val)
+            header_info["L6"] = _cell_text(ws.cell(row=6, column=12).value)
+            header_info["L7"] = _cell_text(ws.cell(row=7, column=12).value)
+
+            r = DATA_START_ROW
+            while True:
+                val_a = ws.cell(row=r, column=1).value
+                if val_a is None or not _cell_text(val_a):
+                    break
+
+                row_dict = {
+                    "num": _cell_text(val_a),
+                    "doc_date": _format_excel_date(ws.cell(row=r, column=2).value),
+                    "doc_num": _cell_text(ws.cell(row=r, column=3).value),
+                    "igk": _cell_text(ws.cell(row=r, column=5).value),
+                    "date_i": _format_excel_date(ws.cell(row=r, column=9).value),
+                    "text_j": _cell_text(ws.cell(row=r, column=10).value),
+                    "sum_k": ws.cell(row=r, column=11).value,
+                }
+                rows_data.append(row_dict)
+                r += 1
 
             wb.close()
 
-        # Форматирование в красивый XML (pretty print)
-        xml_str = minidom.parseString(ET.tostring(root, encoding="utf-8")).toprettyxml(indent="  ")
-
-        save_path = filedialog.asksaveasfilename(
-            parent=dialog_parent(parent),
-            title="Сохранить файл XML",
-            defaultextension=".xml",
-            filetypes=[("XML Files", "*.xml")],
-            initialfile=os.path.splitext(os.path.basename(excel_path))[0] + ".xml",
-        )
-
-        if save_path:
-            with open(save_path, "w", encoding="utf-8") as f:
-                f.write(xml_str)
-            messagebox.showinfo(
-                "Успех",
-                f"Файл успешно сконвертирован и сохранен:\n{save_path}",
-                parent=dialog_parent(parent),
-            )
-
     except Exception as exc:
-        messagebox.showerror(
-            "Ошибка",
-            f"Ошибка при конвертации в XML:\n{exc}",
+        messagebox.showerror("Ошибка", f"Ошибка чтения файла Excel:\n{exc}", parent=dialog_parent(parent))
+        return
+
+    if not rows_data:
+        messagebox.showwarning("Внимание", "В Excel-файле не найдены данные начиная со строки 15.", parent=dialog_parent(parent))
+        return
+
+    # Расчет общей суммы
+    total_sum = 0.0
+    for item in rows_data:
+        is_num, val_float = _is_numeric_value(str(item["sum_k"]).replace(" ", "").replace("\xa0", ""))
+        if is_num:
+            total_sum += val_float
+
+    # Построение XML структуры по шаблону TSE_0401060_D07
+    ET.register_namespace("self", "http://www.roskazna.ru/eb/domain/TSE_0401060_D07/formular")
+    root = ET.Element("{http://www.roskazna.ru/eb/domain/TSE_0401060_D07/formular}TSE_0401060_D07")
+    root.set("metaType", "formular")
+    root.set("Version", "9.0")
+
+    today_str = dt.date.today().strftime("%Y-%m-%d")
+
+    # Основные реквизиты
+    doc_num_elem = ET.SubElement(root, "BasicRequisites_DocNum")
+    doc_num_elem.text = "1"
+
+    doc_date_elem = ET.SubElement(root, "BasicRequisites_DocDate")
+    doc_date_elem.text = today_str
+
+    pay_sum_elem = ET.SubElement(root, "BasicRequisites_PaySum")
+    pay_sum_elem.text = f"{total_sum:.2f}"
+
+    pay_view_elem = ET.SubElement(root, "BasicRequisites_PayView")
+    pay_view_elem.set("code", "0")
+    pay_view_elem.set("value", "Пусто")
+
+    oper_type = ET.SubElement(root, "AdditionalInfo_OperType")
+    oper_type.text = "01"
+
+    pay_order = ET.SubElement(root, "AdditionalInfo_PayOrder")
+    pay_order.text = "5"
+
+    # Данные Плательщика и Получателя
+    first_igk = rows_data[0]["igk"] if rows_data else ""
+    first_doc_num = rows_data[0]["doc_num"] if rows_data else ""
+    first_doc_date = rows_data[0]["doc_date"] if rows_data else ""
+
+    fields_payer = [
+        ("PayerAndRecipient_Payer_INN", "5027330277"),
+        ("PayerAndRecipient_Payer_KPP", "502701001"),
+        ("PayerAndRecipient_Payer_Code", "460ЩL1Э2"),
+        ("PayerAndRecipient_Payer_PersonalAcc", header_info.get("L6") or "711ЩL1Э2001"),
+        ("PayerAndRecipient_Payer_Name", 'УФК ПО Г. МОСКВЕ (ООО "ВЕБПРО")'),
+        ("PayerAndRecipient_Payer_CheckAcc", "03215643000000017301"),
+        ("PayerAndRecipient_Payer_BIK", "004525988"),
+        ("PayerAndRecipient_Payer_BankName", "ОКЦ № 1 ГУ Банка России по ЦФО//УФК ПО Г. МОСКВЕ, г Москва"),
+        ("PayerAndRecipient_Payer_CorrAcc", "40102810545370000003"),
+        ("PayerAndRecipient_Recip_INN", "5027330277"),
+        ("PayerAndRecipient_Recip_KPP", "502701001"),
+        ("PayerAndRecipient_Recip_Code", "460ЩL1Э2"),
+        ("PayerAndRecipient_Recip_Name", 'ООО "ВЕБПРО"'),
+        ("PayerAndRecipient_Recip_CheckAcc", "40702810303800090663"),
+        ("PayerAndRecipient_Recip_BIK", "044525187"),
+        ("PayerAndRecipient_Recip_BankName", "Банк ВТБ (ПАО)"),
+        ("PayerAndRecipient_Recip_CorrAcc", "30101810700000000187"),
+        ("TAX_UIN", first_igk),
+        ("TranscriptPP_TransuseSign", "false"),
+        ("TranscriptPP_ReturnSign", "false"),
+    ]
+
+    for tag_name, val in fields_payer:
+        el = ET.SubElement(root, tag_name)
+        el.text = val
+
+    # Табличная часть
+    tab_elem = ET.SubElement(root, "TSE_Tab0401060")
+
+    for idx, row in enumerate(rows_data, start=1):
+        item_elem = ET.SubElement(tab_elem, "TSE_Tab0401060_ITEM")
+
+        cid = ET.SubElement(item_elem, "ContractID")
+        cid.text = row["igk"]
+
+        num_pp = ET.SubElement(item_elem, "NumPP")
+        num_pp.text = str(idx)
+
+        view_c = ET.SubElement(item_elem, "ViewC")
+        view_c.set("value", "Договор")
+        view_c.set("code", "0")
+
+        # Форматирование даты в ГГГГ-ММ-ДД для XML
+        raw_date = row["doc_date"]
+        formatted_xml_date = raw_date
+        if len(raw_date) == 10 and raw_date[2] == "." and raw_date[5] == ".":
+            parts = raw_date.split(".")
+            formatted_xml_date = f"{parts[2]}-{parts[1]}-{parts[0]}"
+
+        ddate = ET.SubElement(item_elem, "DocDate")
+        ddate.text = formatted_xml_date
+
+        dnum = ET.SubElement(item_elem, "DocNum")
+        dnum.text = row["doc_num"]
+
+        cop = ET.SubElement(item_elem, "CodeObjectPayer")
+        cop.text = "9100"
+
+        dcop = ET.SubElement(item_elem, "DetCodeObjectPayer")
+        dcop.text = "9100001"
+
+        is_num, val_float = _is_numeric_value(str(row["sum_k"]).replace(" ", "").replace("\xa0", ""))
+        sum_val = f"{val_float:.2f}" if is_num else "0.00"
+
+        s_elem = ET.SubElement(item_elem, "Sum")
+        s_elem.text = sum_val
+
+        s_nds = ET.SubElement(item_elem, "SumNDS")
+        s_nds.text = "0.00"
+
+        acp = ET.SubElement(item_elem, "AnalyticCodePay")
+        acp.text = header_info.get("L7") or "26029394"
+
+    # Завершающие теги
+    bpr = ET.SubElement(root, "BPR")
+    bpr.text = "false"
+
+    rdo_sign = ET.SubElement(root, "RegistryDocsBaseAttechmentSix_RDOuseSign")
+    rdo_sign.text = "false"
+
+    l6_val = header_info.get("L6") or "711ЩL1Э2001"
+    purpose_text = f"({l6_val};9100001) Договор {first_doc_num} от {first_doc_date} НДС0.00"
+    pay_purpose = ET.SubElement(root, "TranscriptPP_PayPurpose")
+    pay_purpose.text = purpose_text
+
+    sum_kbk = ET.SubElement(root, "SumKBKTotal")
+    sum_kbk.text = f"{total_sum:.2f}"
+
+    sum_nds_tot = ET.SubElement(root, "SumNDSTotal")
+    sum_nds_tot.text = "0.00"
+
+    # Форматирование XML
+    xml_bytes = ET.tostring(root, encoding="utf-8")
+    dom = minidom.parseString(xml_bytes)
+    xml_pretty_str = dom.toprettyxml(indent="", newl="")
+
+    save_path = filedialog.asksaveasfilename(
+        parent=dialog_parent(parent),
+        title="Сохранить файл XML",
+        defaultextension=".xml",
+        filetypes=[("XML Files", "*.xml")],
+        initialfile=os.path.splitext(os.path.basename(excel_path))[0] + ".xml",
+    )
+
+    if save_path:
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(xml_pretty_str)
+        messagebox.showinfo(
+            "Успех",
+            f"Файл успешно сконвертирован в формат TSE_0401060_D07 и сохранен:\n{save_path}",
             parent=dialog_parent(parent),
         )
