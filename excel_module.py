@@ -655,17 +655,40 @@ def dzo_select_folder_and_excel(parent: tk.Misc | None = None) -> tuple[str | No
     return folder_path, excel_path
 
 
+import datetime as dt
+
+def _format_excel_date(val: object) -> str:
+    """Вспомогательная функция для форматирования даты в ДД.ММ.ГГГГ."""
+    if val is None:
+        return ""
+    if isinstance(val, (dt.datetime, dt.date)):
+        return val.strftime("%d.%m.%Y")
+    if isinstance(val, float) and val > 1000:
+        # Дата в виде float (серийный номер Excel)
+        try:
+            dt_obj = dt.datetime.fromordinal(dt.datetime(1900, 1, 1).toordinal() + int(val) - 2)
+            return dt_obj.strftime("%d.%m.%Y")
+        except Exception:
+            pass
+    text = str(val).strip()
+    # Если дата записана строкой формата ГГГГ-ММ-ДД
+    if len(text) >= 10 and text[4] == '-' and text[7] == '-':
+        parts = text[:10].split('-')
+        return f"{parts[2]}.{parts[1]}.{parts[0]}"
+    return text
+
+
 def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
     """
     Читает Excel файл (.xlsx, .xlsm, .xls) начиная со 2-й строки.
     Останавливается, если в столбцах A, B, C встречаются пустые ячейки.
-    Фильтрует строки по столбцу I (значение должно начинаться на '40817').
-    Возвращает список кортежей (Col_A, Col_B, Col_D).
+    Фильтрует строки по столбцу I (берет только те, у которых значение НАЧИНАЕТСЯ на '40817').
+    Возвращает список кортежей с форматированными данными: (Col_A_Date, Col_B_Text, Col_D_Num).
     """
     ext = os.path.splitext(excel_path)[1].lower()
     result = []
 
-    # Чтение старого формата .xls через xlrd или COM-объект
+    # Чтение старого формата .xls через xlrd
     if ext == ".xls":
         try:
             import xlrd
@@ -691,14 +714,27 @@ def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
             if not str_a or not str_b or not str_c:
                 break
 
-            val_d = ws.cell_value(row, 3)
-            str_d = _cell_text(val_d)
-
             val_i = ws.cell_value(row, 8)  # Столбец I (индекс 8)
             str_i = _cell_text(val_i)
 
+            # Строгое условие: только записи, начинающиеся с 40817
             if str_i.startswith("40817"):
-                result.append((str_a, str_b, str_d))
+                # Форматирование Столбца A (Дата)
+                if ws.cell_type(row, 0) == xlrd.XL_CELL_DATE:
+                    dt_tuple = xlrd.xldate_as_tuple(val_a, wb.datemode)
+                    formatted_a = f"{dt_tuple[2]:02d}.{dt_tuple[1]:02d}.{dt_tuple[0]}"
+                else:
+                    formatted_a = _format_excel_date(val_a)
+
+                # Форматирование Столбца B (Текст)
+                formatted_b = str_b
+
+                # Форматирование Столбца D (Число)
+                val_d = ws.cell_value(row, 3)
+                is_num, float_d = _is_numeric_value(val_d)
+                formatted_d = f"{float_d:,.2f}".replace(",", " ").replace(".", ",") if is_num else _cell_text(val_d)
+
+                result.append((formatted_a, formatted_b, formatted_d))
 
             row += 1
 
@@ -727,14 +763,20 @@ def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
         if not str_a or not str_b or not str_c:
             break
 
-        val_d = ws.cell(row=row, column=4).value
-        str_d = _cell_text(val_d)
-
         val_i = ws.cell(row=row, column=9).value
         str_i = _cell_text(val_i)
 
+        # Строгое условие: только записи, начинающиеся с 40817
         if str_i.startswith("40817"):
-            result.append((str_a, str_b, str_d))
+            # Форматирование A, B, D
+            formatted_a = _format_excel_date(val_a)
+            formatted_b = str_b
+
+            val_d = ws.cell(row=row, column=4).value
+            is_num, float_d = _is_numeric_value(val_d)
+            formatted_d = f"{float_d:,.2f}".replace(",", " ").replace(".", ",") if is_num else _cell_text(val_d)
+
+            result.append((formatted_a, formatted_b, formatted_d))
 
         row += 1
 
@@ -797,8 +839,11 @@ def run_dzo_select_folder_and_process(parent: tk.Misc | None, tree: ttk.Treeview
 
 def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
     """
-    Обработчик кнопки 'Перенести список в РДО (Excel)'.
-    Переносит A -> I15, B -> J15, D -> K15 и названия файлов в стандартную колонку.
+    Обработчик кнопки 'Перенести список в РДО (Excel)' во вкладке ДЗО.
+    Поддерживает:
+    - Запросом ручного ввода для B15, C15:D15, E15:F15, L6 и L7.
+    - Нумерацию строк в столбце A (1, 2, 3...).
+    - Перенос A -> I (9), B -> J (10), D -> K (11), Название файла -> filename_col.
     """
     if not HAS_WIN32:
         messagebox.showerror(
@@ -829,6 +874,21 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
     if not proceed:
         return
 
+    # Предварительное считывание значений строки 15 для ручного ввода
+    pre_read = _read_manual_row15_openpyxl(target_path)
+    manual_entries: dict[int, str] = {}
+    l6_value = ""
+    l7_value = ""
+
+    if pre_read is not None:
+        empty_fields = tuple(
+            (col, label, prompt) for col, label, prompt in MANUAL_ROW15_FIELDS if not pre_read.get(col)
+        )
+        entered = name_ask_manual_combined(parent, "Ручной ввод ДЗО", empty_fields, True)
+        manual_entries = {c: v for c, v in entered.items() if c in (2, 3, 5)}
+        l6_value = entered.get("L6", "")
+        l7_value = entered.get("L7", "")
+
     pythoncom.CoInitialize()
     excel = None
     workbook = None
@@ -839,9 +899,38 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
         workbook = _open_workbook(excel, target_path)
         ws = workbook.Worksheets(1)
 
-        filename_col = _find_filename_column(ws)
+        # Если данные в строке 15 не считывались openpyxl
+        if pre_read is None:
+            current = _read_manual_row_values(ws, DATA_START_ROW)
+            empty_fields = tuple(
+                (col, label, prompt) for col, label, prompt in MANUAL_ROW15_FIELDS if not current.get(col)
+            )
+            entered = name_ask_manual_combined(parent, "Ручной ввод ДЗО", empty_fields, True)
+            manual_entries = {c: v for c, v in entered.items() if c in (2, 3, 5)}
+            l6_value = entered.get("L6", "")
+            l7_value = entered.get("L7", "")
 
-        # Подготовка строк при необходимости
+        # Применяем ручной ввод для B15, C15, E15 и ячеек L6/L7
+        _apply_manual_row_entries(ws, DATA_START_ROW, manual_entries)
+        _apply_l6_l7(ws, l6_value, l7_value)
+        _ensure_manual_row_text_format(ws, DATA_START_ROW)
+
+        filename_col = _find_filename_column(ws)
+        total_search_row = DATA_START_ROW + 1
+        total_col = _find_total_column(ws, total_search_row)
+        total_row = DATA_START_ROW + data_count
+
+        # Проверка и установка базового номера в A15
+        cell_a15_value = ws.Cells(DATA_START_ROW, 1).Value
+        is_numeric, base_value = _is_numeric_value(cell_a15_value)
+        if not is_numeric or base_value == 0:
+            base_value = 1.0
+            ws.Cells(DATA_START_ROW, 1).Value = 1
+
+        _unmerge_row_cells(ws, 18, ("A",))
+        _unmerge_row_cells(ws, 19, ("A",))
+
+        # Вставка дополнительного количества строк
         if data_count >= 2:
             insert_count = data_count - 1
             source_row = ws.Rows(DATA_START_ROW)
@@ -850,17 +939,28 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
             target_rows.Insert(Shift=XL_SHIFT_DOWN)
             excel.CutCopyMode = False
 
-        # Заполнение данных:
-        # Col A -> I (9), Col B -> J (10), Col D -> K (11)
-        # Filename -> filename_col
+        # Заполнение основных данных ДЗО по столбцам
         for idx, row in enumerate(rows_data):
             r = DATA_START_ROW + idx
             val_a, val_b, val_d, fname = row[0], row[1], row[2], row[3]
 
-            _set_cell_display_value(ws, r, 9, str(val_a))  # Столбец I
-            _set_cell_display_value(ws, r, 10, str(val_b))  # Столбец J
-            _set_cell_display_value(ws, r, 11, str(val_d))  # Столбец K
-            _set_cell_display_value(ws, r, filename_col, str(fname))
+            _set_cell_display_value(ws, r, 9, str(val_a))  # Столбец I (Дата ДД.ММ.ГГГГ)
+            _set_cell_display_value(ws, r, 10, str(val_b))  # Столбец J (Текстовый)
+            _set_cell_display_value(ws, r, 11, str(val_d))  # Столбец K (Числовой)
+            _set_cell_display_value(ws, r, filename_col, str(fname))  # Наименование файла
+
+        # Заполнение итоговой строки при малом кол-ве элементов
+        if 1 <= data_count <= 5:
+            total_cell = ws.Cells(total_row, total_col)
+            if total_cell.MergeCells:
+                total_cell.MergeArea.Cells(1, 1).Value = "Итого"
+            else:
+                total_cell.Value = "Итого"
+
+        # Нумерация по порядку (1, 2, 3...) в столбце A для всех созданных строк
+        if data_count >= 2:
+            col_a_values = [int(base_value + i) for i in range(1, data_count)]
+            _write_column_values(ws, DATA_START_ROW + 1, 1, col_a_values)
 
         workbook.Save()
         messagebox.showinfo("Готово", f"Данные успешно перенесены в РДО!\nПеренесено строк: {data_count}",
