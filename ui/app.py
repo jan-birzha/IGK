@@ -209,7 +209,7 @@ class IGKNameApp:
         ModernNeonCardButton(
             top_cards,
             text="Выбор папки для РДО",
-            subtitle="Выбрать папку с файлами и Excel-файл для отбора по лицевому счету (40817...)",
+            subtitle="Выбрать папку с файлами и Excel-файл",
             icon="📁",
             command=lambda: self._launch(
                 lambda p: run_dzo_select_folder_and_process(p, self.dzo_tree)
@@ -226,7 +226,7 @@ class IGKNameApp:
         ModernNeonCardButton(
             bottom_cards,
             text="Перенести список в РДО (Excel)",
-            subtitle="Экспортировать сопоставленные данные (A->I15, B->J15, D->K15) в Excel",
+            subtitle="Экспортировать сопоставленные данные в Excel",
             icon="📊",
             command=lambda: self._launch(
                 lambda p: run_dzo_insert_to_rdo(p, self.dzo_tree)

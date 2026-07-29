@@ -682,7 +682,7 @@ def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
     """
     Читает Excel файл (.xlsx, .xlsm, .xls) начиная со 2-й строки.
     Останавливается, если в столбцах A, B, C встречаются пустые ячейки.
-    Фильтрует строки по столбцу I (берет только те, у которых значение НАЧИНАЕТСЯ на '40817').
+    ИГНОРИРУЕТ строки, если значение в столбце I не начинается строго с '40817'.
     Возвращает список кортежей с форматированными данными: (Col_A_Date, Col_B_Text, Col_D_Num).
     """
     ext = os.path.splitext(excel_path)[1].lower()
@@ -715,9 +715,10 @@ def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
                 break
 
             val_i = ws.cell_value(row, 8)  # Столбец I (индекс 8)
-            str_i = _cell_text(val_i)
+            # Очищаем значение столбца I от случайных пробелов и кавычек
+            str_i = _cell_text(val_i).strip().lstrip("'\"").strip()
 
-            # Строгое условие: только записи, начинающиеся с 40817
+            # СТРОГОЕ УСЛОВИЕ: Добавляем строку ТОЛЬКО если номер счета начинается на '40817'
             if str_i.startswith("40817"):
                 # Форматирование Столбца A (Дата)
                 if ws.cell_type(row, 0) == xlrd.XL_CELL_DATE:
@@ -764,9 +765,10 @@ def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
             break
 
         val_i = ws.cell(row=row, column=9).value
-        str_i = _cell_text(val_i)
+        # Очищаем значение столбца I от случайных пробелов и кавычек
+        str_i = _cell_text(val_i).strip().lstrip("'\"").strip()
 
-        # Строгое условие: только записи, начинающиеся с 40817
+        # СТРОГОЕ УСЛОВИЕ: Добавляем строку ТОЛЬКО если номер счета начинается на '40817'
         if str_i.startswith("40817"):
             # Форматирование A, B, D
             formatted_a = _format_excel_date(val_a)
@@ -806,8 +808,8 @@ def match_dzo_data(excel_rows: list[tuple[str, str, str]], filenames: list[str])
                 break
         if found_row:
             matched.append((found_row[0], found_row[1], found_row[2], filename))
-        else:
-            matched.append(("", "", "", filename))
+        # else:
+        #     matched.append(("", "", "", filename))
     return matched
 
 
@@ -944,9 +946,31 @@ def run_dzo_insert_to_rdo(parent: tk.Misc | None, tree: ttk.Treeview) -> None:
             r = DATA_START_ROW + idx
             val_a, val_b, val_d, fname = row[0], row[1], row[2], row[3]
 
-            _set_cell_display_value(ws, r, 9, str(val_a))  # Столбец I (Дата ДД.ММ.ГГГГ)
-            _set_cell_display_value(ws, r, 10, str(val_b))  # Столбец J (Текстовый)
-            _set_cell_display_value(ws, r, 11, str(val_d))  # Столбец K (Числовой)
+            _set_cell_display_value(ws, r, 9, str(val_a))  # Столбец I (Дата)
+            _set_cell_display_value(ws, r, 10, str(val_b))  # Столбец J (Текст)
+
+            # --- ЗАПИСЬ СУММЫ В ЧИСЛОВОМ ФОРМАТЕ (Столбец K / 11) ---
+            cell_k = ws.Cells(r, 11)
+            target_k = _cell_target_range(cell_k)
+
+            # Очищаем строку от пробелов и неразрывных пробелов (\xa0)
+            val_d_clean = str(val_d).replace(" ", "").replace("\xa0", "")
+            is_num, float_val = _is_numeric_value(val_d_clean)
+
+            if is_num:
+                # Сначала записываем числовое значение в левую верхнюю ячейку диапазона
+                target_k.Cells(1, 1).Value = float_val
+                # Безопасно применяем числовой формат для русской/английской локали Excel
+                try:
+                    target_k.NumberFormatLocal = "# ##0,00"
+                except Exception:
+                    try:
+                        target_k.NumberFormat = "#,##0.00"
+                    except Exception:
+                        pass  # Если Excel блокирует смену формата, значение всё равно останется числом
+            else:
+                target_k.Cells(1, 1).Value = val_d
+
             _set_cell_display_value(ws, r, filename_col, str(fname))  # Наименование файла
 
         # Заполнение итоговой строки при малом кол-ве элементов

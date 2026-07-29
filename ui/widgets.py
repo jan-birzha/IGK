@@ -277,9 +277,9 @@ def build_dzo_rdo_table_section(parent_frame: tk.Widget) -> ttk.Treeview:
         style="DZO.Treeview"
     )
 
-    tree.heading("col_a", text="Столбец A (Дата)")
-    tree.heading("col_b", text="Столбец B")
-    tree.heading("col_d", text="Столбец D (Сумма)")
+    tree.heading("col_a", text="Дата")
+    tree.heading("col_b", text="Номер")
+    tree.heading("col_d", text="Сумма")
     tree.heading("filename", text="Наименование файла")
 
     tree.column("col_a", width=110, anchor="center")
