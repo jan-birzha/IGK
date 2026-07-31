@@ -5,7 +5,7 @@ import os
 import platform
 import time
 import tkinter as tk
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
@@ -292,10 +292,24 @@ def _process_igk_paths(paths: list[str], parent: tk.Misc | None = None) -> None:
     font_path = resolve_arial_font_path()
     total = len(paths)
 
+    # Тайм-аут на обработку одного файла: специально сконструированный
+    # "файл-бомба" (PDF/TIFF/GIF с экстремальной структурой) не должен
+    # бесконечно занимать поток и блокировать весь пакет (CWE-400, DoS).
+    PER_FILE_TIMEOUT_SECONDS = 60
+
     if total >= PARALLEL_MIN_FILES:
         args_list = [(path, stamp, font_path) for path in paths]
+        results = []
         with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
-            results = list(executor.map(process_single_file, args_list))
+            futures = {executor.submit(process_single_file, args): args[0] for args in args_list}
+            for future in futures:
+                path = futures[future]
+                try:
+                    results.append(future.result(timeout=PER_FILE_TIMEOUT_SECONDS))
+                except TimeoutError:
+                    results.append((path, False, f"Превышено время обработки файла ({PER_FILE_TIMEOUT_SECONDS}s)"))
+                except Exception as exc:
+                    results.append((path, False, str(exc)))
     else:
         pil_font = load_image_font()
         results = []

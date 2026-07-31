@@ -31,6 +31,24 @@ except ImportError:
     HAS_WIN32 = False
 
 
+# ── Защита от формульной инъекции в Excel (CWE-1236) ───────────────────────
+# Строки, начинающиеся с одного из этих символов, Excel может интерпретировать
+# как формулу при присвоении через .Value по COM, независимо от NumberFormat.
+_FORMULA_LEAD_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_excel_text(value: object) -> object:
+    """
+    Нейтрализует потенциальную формульную инъекцию: если строка начинается
+    с символа, который Excel трактует как признак формулы, добавляет ведущий
+    апостроф, форсирующий текстовый тип ячейки.
+    Значения, не являющиеся строками (числа, даты), возвращаются как есть.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_LEAD_CHARS):
+        return "'" + value
+    return value
+
+
 def _read_range_row_values(block) -> tuple:
     if block is None:
         return ()
@@ -44,12 +62,34 @@ def _read_range_row_values(block) -> tuple:
 def _write_column_values(ws, start_row: int, col: int, values: list) -> None:
     if not values:
         return
-    if len(values) == 1:
-        ws.Cells(start_row, col).Value = values[0]
-        return
+
     top = ws.Cells(start_row, col)
     bottom = ws.Cells(start_row + len(values) - 1, col)
+    target_range = ws.Range(top, bottom) if len(values) > 1 else top
+
+    # Эта функция используется и для текстовых данных (имена файлов), и для
+    # чисто числовых (порядковая нумерация в столбце A). Форсируем текстовый
+    # формат и нейтрализуем ведущие формульные символы только когда среди
+    # значений реально есть строки — иначе не ломаем числовое форматирование.
+    has_strings = any(isinstance(v, str) for v in values)
+    if has_strings:
+        try:
+            target_range.NumberFormat = XL_TEXT_FORMAT
+            target_range.NumberFormatLocal = XL_TEXT_FORMAT
+        except Exception:
+            pass
+        values = [_sanitize_excel_text(v) for v in values]
+
+    if len(values) == 1:
+        top.Value = values[0]
+        return
     ws.Range(top, bottom).Value = tuple((v,) for v in values)
+
+
+# msoAutomationSecurityForceDisable — принудительно отключает выполнение ЛЮБЫХ
+# макросов (включая legacy Sub Auto_Open, который срабатывает при открытии
+# файла независимо от Application.EnableEvents) без уведомления пользователя.
+MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
 
 
 def _configure_excel_fast(excel) -> None:
@@ -57,6 +97,21 @@ def _configure_excel_fast(excel) -> None:
     excel.DisplayAlerts = False
     excel.ScreenUpdating = False
     excel.EnableEvents = False
+
+    # КРИТИЧНО: файлы .xlsx/.xlsm/.xls открываются из произвольной папки,
+    # выбранной пользователем, и могут содержать вредоносные макросы
+    # (CWE-95, Code Injection). DisplayAlerts=False скрывает от пользователя
+    # штатное предупреждение Excel про макросы, поэтому отключение макросов
+    # ниже не опционально — при сбое обработка должна прерываться, а не
+    # продолжаться в "тихом" режиме с ослабленной защитой.
+    try:
+        excel.AutomationSecurity = MSO_AUTOMATION_SECURITY_FORCE_DISABLE
+    except Exception as exc:
+        raise RuntimeError(
+            "Не удалось принудительно отключить макросы Excel (AutomationSecurity). "
+            "Обработка файлов остановлена в целях безопасности."
+        ) from exc
+
     try:
         excel.Calculation = XL_CALCULATION_MANUAL
     except Exception:
@@ -206,7 +261,10 @@ def _set_cell_display_value(ws, row: int, col: int, value: str) -> None:
         target.NumberFormatLocal = XL_TEXT_FORMAT
     except Exception:
         pass
-    target.Cells(1, 1).Value = value
+    # Доп. слой защиты (defense in depth) поверх NumberFormat="@": COM может
+    # трактовать строку, начинающуюся с "=", "+" и т.п., как формулу даже
+    # при текстовом формате ячейки (CWE-1236, Formula Injection).
+    target.Cells(1, 1).Value = _sanitize_excel_text(value)
 
 
 def _read_manual_row_values(ws, row: int = DATA_START_ROW) -> dict[int, str]:
@@ -1182,6 +1240,16 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
 
     # 1. Доработка: Сохранение оригинальной строки <TranscriptPP_PayPurpose> из шаблона
     import re
+    from xml.sax.saxutils import escape as _xml_escape, quoteattr as _xml_quoteattr
+
+    def _xml_text(value: object) -> str:
+        """Экранирует спецсимволы XML (<, >, &) для текстовых узлов (CWE-91)."""
+        return _xml_escape(str(value) if value is not None else "")
+
+    def _xml_attr(value: object) -> str:
+        """Экранирует и оборачивает в кавычки значение атрибута XML (CWE-91)."""
+        return _xml_quoteattr(str(value) if value is not None else "")
+
     pay_purpose_match = re.search(r"<TranscriptPP_PayPurpose>(.*?)</TranscriptPP_PayPurpose>", template_content, re.DOTALL)
     if pay_purpose_match:
         pay_purpose_str = pay_purpose_match.group(0)
@@ -1208,22 +1276,32 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
     xml_items = []
     for idx, row in enumerate(excel_rows, start=1):
         view_c_val = row["ViewC"]
-        view_c_str = f'<ViewC code="7">{view_c_val}</ViewC>' if view_c_val else '<ViewC code="7">Платежное поручение</ViewC>'
+        view_c_str = (
+            f'<ViewC code="7">{_xml_text(view_c_val)}</ViewC>'
+            if view_c_val else '<ViewC code="7">Платежное поручение</ViewC>'
+        )
 
         # 2. Доработка: ScanCopy включается в конец раздела <Tab_ReqODB_D07_ITEM>
         scan_copy_val = row["ScanCopy"]
-        scan_copy_tag = f'\n            <ScanCopy attachFileName="{scan_copy_val}"/>' if scan_copy_val else ""
+        scan_copy_tag = (
+            f'\n            <ScanCopy attachFileName={_xml_attr(scan_copy_val)}/>'
+            if scan_copy_val else ""
+        )
 
+        # Все значения из Excel экранируются через _xml_text/_xml_attr перед
+        # вставкой в XML — данные пришли из внешнего файла и не должны
+        # ломать структуру документа или внедрять посторонние узлы/атрибуты
+        # (CWE-91, XML Injection).
         item_xml = f"""        <Tab_ReqODB_D07_ITEM>
-            <ContractID>{row['ContractID']}</ContractID>
+            <ContractID>{_xml_text(row['ContractID'])}</ContractID>
             <NumPP>{idx}</NumPP>
-            <DocDateDB>{row['DocDateDB']}</DocDateDB>
-            <DocNumDB>{row['DocNumDB']}</DocNumDB>
+            <DocDateDB>{_xml_text(row['DocDateDB'])}</DocDateDB>
+            <DocNumDB>{_xml_text(row['DocNumDB'])}</DocNumDB>
             {view_c_str}
-            <DocNum>{row['DocNum']}</DocNum>
-            <DocDate>{row['DocDate']}</DocDate>
-            <Sum>{row['Sum']}</Sum>
-            <SumRet>{row['SumRet']}</SumRet>
+            <DocNum>{_xml_text(row['DocNum'])}</DocNum>
+            <DocDate>{_xml_text(row['DocDate'])}</DocDate>
+            <Sum>{_xml_text(row['Sum'])}</Sum>
+            <SumRet>{_xml_text(row['SumRet'])}</SumRet>
             <SumNDS>0.00</SumNDS>{scan_copy_tag}
         </Tab_ReqODB_D07_ITEM>"""
         xml_items.append(item_xml)

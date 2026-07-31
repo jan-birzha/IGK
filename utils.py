@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import platform
+import threading
 import time
 import tkinter as tk
 from functools import wraps
@@ -11,6 +12,9 @@ from typing import Any, Callable
 from config import ENABLE_PROFILING, UI
 
 _profiling_data: dict[str, list[float]] = {}
+# Защищает _profiling_data от гонки при параллельной записи из нескольких
+# потоков ThreadPoolExecutor (CWE-362: Race Condition).
+_profiling_lock = threading.Lock()
 
 
 def profile_time(func_name: str) -> Callable:
@@ -24,7 +28,8 @@ def profile_time(func_name: str) -> Callable:
                 return func(*args, **kwargs)
             finally:
                 elapsed = time.perf_counter() - start
-                _profiling_data.setdefault(func_name, []).append(elapsed)
+                with _profiling_lock:
+                    _profiling_data.setdefault(func_name, []).append(elapsed)
 
         return wrapper
 
@@ -32,16 +37,21 @@ def profile_time(func_name: str) -> Callable:
 
 
 def clear_profiling_data() -> None:
-    _profiling_data.clear()
+    with _profiling_lock:
+        _profiling_data.clear()
 
 
 def get_profiling_report() -> str:
-    if not _profiling_data or not ENABLE_PROFILING:
-        return ""
+    with _profiling_lock:
+        if not _profiling_data or not ENABLE_PROFILING:
+            return ""
+        # Копируем под локом, дальнейшее форматирование делаем уже вне лока
+        snapshot = {name: list(times) for name, times in _profiling_data.items()}
+
     lines = ["\n=== ПРОФИЛИРОВАНИЕ ==="]
     total_time = 0.0
-    for func_name in sorted(_profiling_data.keys()):
-        times = _profiling_data[func_name]
+    for func_name in sorted(snapshot.keys()):
+        times = snapshot[func_name]
         count = len(times)
         total = sum(times)
         avg = total / count if count else 0.0
