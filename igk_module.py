@@ -275,6 +275,23 @@ def igk_validate_paths(paths: list[str]) -> list[str]:
     return [p for p in paths if os.path.splitext(p)[1].lower() in SUPPORTED_EXTENSIONS]
 
 
+def rename_igk_file(file_path: str) -> str:
+    """
+    Заменяет в наименовании файла '_' на пробел и '-' на точку.
+    Возвращает новый путь к переименованному файлу (или исходный, если имя не менялось).
+    """
+    dir_name, old_name = os.path.split(file_path)
+    new_name = old_name.replace("_", " ").replace("-", ".")
+    if new_name != old_name:
+        new_path = os.path.join(dir_name, new_name)
+        try:
+            os.rename(file_path, new_path)
+            return new_path
+        except Exception:
+            return file_path
+    return file_path
+
+
 def _process_igk_paths(paths: list[str], parent: tk.Misc | None = None) -> None:
     clear_profiling_data()
     start_total = time.perf_counter()
@@ -288,6 +305,7 @@ def _process_igk_paths(paths: list[str], parent: tk.Misc | None = None) -> None:
     if user_text is None:
         return
 
+    paths = [rename_igk_file(p) for p in paths]
     stamp = build_stamp_text(user_text)
     font_path = resolve_arial_font_path()
     total = len(paths)

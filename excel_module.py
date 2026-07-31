@@ -845,14 +845,15 @@ def read_dzo_excel_data(excel_path: str) -> list[tuple[str, str, str]]:
 
 
 def extract_match_tokens(filename: str) -> list[str]:
-    """Разбивает имя файла по символу '_' для сопоставления со столбцом B."""
+    """Разбивает имя файла по символу пробела ' ' для сопоставления со столбцом B."""
     name_without_ext = os.path.splitext(filename)[0]
-    return [token.strip() for token in name_without_ext.split("_") if token.strip()]
+    return [token.strip() for token in name_without_ext.split(" ") if token.strip()]
 
 
 def match_dzo_data(excel_rows: list[tuple[str, str, str]], filenames: list[str]) -> list[tuple[str, str, str, str]]:
     """
-    Сопоставляет данные из Excel с именами файлов по совпадению столбца B и части имени файла.
+    Сопоставляет данные из Excel с именами файлов по совпадению столбца B
+    и любой из частей имени файла (разделённых пробелом).
     Возвращает список строк таблицы вида: (A, B, D, Filename)
     """
     matched = []
@@ -866,8 +867,6 @@ def match_dzo_data(excel_rows: list[tuple[str, str, str]], filenames: list[str])
                 break
         if found_row:
             matched.append((found_row[0], found_row[1], found_row[2], filename))
-        # else:
-        #     matched.append(("", "", "", filename))
     return matched
 
 
