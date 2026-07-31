@@ -75,7 +75,7 @@ class IGKNameApp:
         self._create_sidebar_btn(sidebar, "Работа с массивом пакетов", 1, pady=4)
         self._create_sidebar_btn(sidebar, "Работа с одним пакетом ДЗО", 2, pady=4)
 
-        footer_lbl = tk.Label(sidebar, text="Версия 2.2 (Modern UI)", font=UI["font_footer"], bg=UI["bg_sidebar"], fg=UI["muted"])
+        footer_lbl = tk.Label(sidebar, text="Версия 3.0 (Modern UI)", font=UI["font_footer"], bg=UI["bg_sidebar"], fg=UI["muted"])
         footer_lbl.pack(side=tk.BOTTOM, pady=20)
 
         # Main Content
