@@ -403,10 +403,20 @@ def name_ask_manual_combined(
             result[key] = entry.get().strip()
         dialog.destroy()
 
-    ok_btn = tk.Button(btn_frame, text="OK", command=on_ok, bg=UI["accent_primary"], fg="#ffffff", relief=tk.FLAT,
-                       width=10, font=("Segoe UI", 9, "bold"), activebackground=UI["accent_hover"],
-                       activeforeground="#ffffff")
+    ok_btn = tk.Label(
+        btn_frame,
+        text="OK",
+        bg=UI["accent_primary"],
+        fg="#ffffff",
+        font=("Segoe UI", 9, "bold"),
+        padx=22,
+        pady=6,
+        cursor="hand2",
+    )
     ok_btn.pack(side=tk.LEFT, padx=6)
+    ok_btn.bind("<Button-1>", lambda _e: on_ok())
+    ok_btn.bind("<Enter>", lambda _e: ok_btn.configure(bg=UI["accent_hover"]))
+    ok_btn.bind("<Leave>", lambda _e: ok_btn.configure(bg=UI["accent_primary"]))
 
     dialog.bind("<Return>", lambda _e: on_ok())
     dialog.bind("<Escape>", lambda _e: on_cancel())

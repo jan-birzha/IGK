@@ -288,7 +288,7 @@ def igk_ask_user_text(parent: tk.Misc | None = None) -> str | None:
     entry.focus_set()
     bind_entry_paste_shortcuts(dialog, entry)
 
-    btn_frame = ttk.Frame(dialog)
+    btn_frame = tk.Frame(dialog, bg=UI["bg_main"])
     btn_frame.pack(pady=(10, 16))
 
     def on_ok() -> None:
@@ -299,14 +299,37 @@ def igk_ask_user_text(parent: tk.Misc | None = None) -> str | None:
         result["value"] = None
         dialog.destroy()
 
-    ok_btn = tk.Button(btn_frame, text="OK", command=on_ok, bg=UI["accent_primary"], fg="#ffffff", relief=tk.FLAT,
-                       width=10, font=("Segoe UI", 9, "bold"), activebackground=UI["accent_hover"],
-                       activeforeground="#ffffff")
+    ok_btn = tk.Label(
+        btn_frame,
+        text="OK",
+        bg=UI["accent_primary"],
+        fg="#ffffff",
+        font=("Segoe UI", 9, "bold"),
+        padx=22,
+        pady=6,
+        cursor="hand2",
+    )
     ok_btn.pack(side=tk.LEFT, padx=6)
-    cancel_btn = tk.Button(btn_frame, text="Отмена", command=on_cancel, bg=UI["card"], fg=UI["muted"], relief=tk.FLAT,
-                           width=10, font=("Segoe UI", 9), highlightthickness=1, highlightbackground=UI["border"],
-                           activebackground=UI["card_hover"])
+    ok_btn.bind("<Button-1>", lambda _e: on_ok())
+    ok_btn.bind("<Enter>", lambda _e: ok_btn.configure(bg=UI["accent_hover"]))
+    ok_btn.bind("<Leave>", lambda _e: ok_btn.configure(bg=UI["accent_primary"]))
+
+    cancel_btn = tk.Label(
+        btn_frame,
+        text="Отмена",
+        bg=UI["card"],
+        fg=UI["muted"],
+        font=("Segoe UI", 9),
+        padx=18,
+        pady=6,
+        cursor="hand2",
+        highlightthickness=1,
+        highlightbackground=UI["border"],
+    )
     cancel_btn.pack(side=tk.LEFT, padx=6)
+    cancel_btn.bind("<Button-1>", lambda _e: on_cancel())
+    cancel_btn.bind("<Enter>", lambda _e: cancel_btn.configure(bg=UI["card_hover"]))
+    cancel_btn.bind("<Leave>", lambda _e: cancel_btn.configure(bg=UI["card"]))
 
     dialog.bind("<Return>", lambda _e: on_ok())
     dialog.bind("<Escape>", lambda _e: on_cancel())
