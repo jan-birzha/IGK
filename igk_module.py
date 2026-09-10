@@ -123,10 +123,12 @@ def measure_stamp_box(stamp: str, arial_path: str | None) -> tuple[float, float]
 def stamp_pdf(path: str, stamp: str) -> None:
     doc = pymupdf.open(path)
 
-    Проверка на ЭП закомментирована: разрешаем вставку в любые PDF
-    if has_digital_signature(doc):
-        doc.close()
-        raise RuntimeError("Файл содержит цифровую подпись. Вставка текста в подписанный PDF невозможна.")
+    # Проверка на ЭП закомментирована: разрешаем вставку в любые PDF
+    # if has_digital_signature(doc):
+    #     print(RuntimeError(
+    #         f"Файл содержит цифровую подпись. Вставка текста в подписанный PDF невозможна.\n"
+    #         f"Файл: {path}")
+    #     )
 
     if doc.page_count == 0:
         doc.close()
