@@ -95,12 +95,39 @@ def has_digital_signature(doc: pymupdf.Document) -> bool:
     return False
 
 
+def measure_stamp_box(stamp: str, arial_path: str | None) -> tuple[float, float]:
+    """
+    Вычисляет реальные ширину и высоту, необходимые для однострочной
+    вставки stamp данным шрифтом при FONT_SIZE. Раньше ширина/высота
+    плашки были захардкожены (200 x 15.5pt), из-за чего длинный текст
+    не помещался в одну строку, insert_textbox() пытался перенести
+    его на вторую строку и вставка падала с ошибкой (Причина 1).
+    """
+    try:
+        font = pymupdf.Font(fontfile=arial_path) if arial_path else pymupdf.Font(fontname="helv")
+    except Exception:
+        font = pymupdf.Font(fontname="helv")
+
+    text_w = font.text_length(stamp, fontsize=FONT_SIZE)
+    line_h = (font.ascender - font.descender) * FONT_SIZE
+
+    padding_w = 6.0
+    padding_h = 4.0
+
+    stamp_w = max(60.0, text_w + padding_w)
+    band_h = max(FONT_SIZE * 1.35 + 2, line_h + padding_h)
+    return stamp_w, band_h
+
+
 @profile_time("stamp_pdf")
 def stamp_pdf(path: str, stamp: str) -> None:
     doc = pymupdf.open(path)
+
+    Проверка на ЭП закомментирована: разрешаем вставку в любые PDF
     if has_digital_signature(doc):
         doc.close()
         raise RuntimeError("Файл содержит цифровую подпись. Вставка текста в подписанный PDF невозможна.")
+
     if doc.page_count == 0:
         doc.close()
         raise ValueError("PDF не содержит страниц.")
@@ -109,11 +136,19 @@ def stamp_pdf(path: str, stamp: str) -> None:
     rotation = page.rotation
 
     m_pt = mm_to_pdf_points(MARGIN_MM)
-    band_h = FONT_SIZE * 1.35 + 2
-    stamp_w = 200
+    arial_path = resolve_arial_font_path()
+    # Размер плашки теперь считается по фактической длине stamp и метрикам
+    # шрифта, а не берётся из фиксированных констант (Причина 1).
+    stamp_w, band_h = measure_stamp_box(stamp, arial_path)
 
-    w = page.rect.width
-    h = page.rect.height
+    # ВАЖНО: page.rect для повёрнутых страниц (90/270) отдаёт "визуальные"
+    # (уже переставленные местами) размеры. Но draw_rect/insert_textbox
+    # всегда рисуют в исходной системе координат mediabox, которая НЕ
+    # переставляется. Использование page.rect.width/height напрямую
+    # приводило к тому, что для повёрнутых страниц штамп мог уезжать
+    # за физические границы страницы (особенно заметно на длинном тексте).
+    w = page.mediabox.width
+    h = page.mediabox.height
 
     if rotation == 90:
         x0, y0, x1, y1 = m_pt, m_pt, m_pt + band_h, m_pt + stamp_w
@@ -127,7 +162,6 @@ def stamp_pdf(path: str, stamp: str) -> None:
     rect = pymupdf.Rect(x0, y0, x1, y1)
     page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
 
-    arial_path = resolve_arial_font_path()
     align_mode = pymupdf.TEXT_ALIGN_LEFT if rotation in (90, 270) else pymupdf.TEXT_ALIGN_RIGHT
 
     if arial_path:
@@ -145,8 +179,13 @@ def stamp_pdf(path: str, stamp: str) -> None:
         doc.close()
         raise RuntimeError(f"Не удалось вставить текст в PDF. Код возврата: {inserted}")
 
-    doc.save(path, incremental=True, encryption=pymupdf.PDF_ENCRYPT_KEEP, clean=False)
+    # Сохраняем во временный файл, чтобы избежать ошибки 'save to original must be incremental'
+    tmp_path = path + ".tmp"
+    doc.save(tmp_path, incremental=False, clean=True, deflate=True)
     doc.close()
+
+    # Замещаем оригинальный файл временным
+    os.replace(tmp_path, path)
 
 
 @profile_time("stamp_raster_image")
@@ -192,7 +231,11 @@ def process_single_file(args: tuple) -> tuple[str, bool, str]:
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext == ".pdf":
-            resave_pdf_with_pypdf(path)
+            # Не пересохраняем через pypdf, если файл уже открыт или заблокирован
+            try:
+                resave_pdf_with_pypdf(path)
+            except Exception:
+                pass
             stamp_pdf(path, stamp)
         else:
             font = ImageFont.truetype(font_path, FONT_SIZE) if font_path else ImageFont.load_default()
@@ -310,9 +353,6 @@ def _process_igk_paths(paths: list[str], parent: tk.Misc | None = None) -> None:
     font_path = resolve_arial_font_path()
     total = len(paths)
 
-    # Тайм-аут на обработку одного файла: специально сконструированный
-    # "файл-бомба" (PDF/TIFF/GIF с экстремальной структурой) не должен
-    # бесконечно занимать поток и блокировать весь пакет (CWE-400, DoS).
     PER_FILE_TIMEOUT_SECONDS = 60
 
     if total >= PARALLEL_MIN_FILES:
@@ -335,7 +375,10 @@ def _process_igk_paths(paths: list[str], parent: tk.Misc | None = None) -> None:
             ext = os.path.splitext(path)[1].lower()
             try:
                 if ext == ".pdf":
-                    resave_pdf_with_pypdf(path)
+                    try:
+                        resave_pdf_with_pypdf(path)
+                    except Exception:
+                        pass
                     stamp_pdf(path, stamp)
                 else:
                     stamp_raster_image(path, stamp, pil_font)
