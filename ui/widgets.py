@@ -274,7 +274,8 @@ def build_dzo_rdo_table_section(parent_frame: tk.Widget) -> ttk.Treeview:
         columns=columns,
         show="headings",
         selectmode="extended",
-        style="DZO.Treeview"
+        style="DZO.Treeview",
+        height=5
     )
 
     tree.heading("col_a", text="Дата")

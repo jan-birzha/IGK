@@ -9,6 +9,7 @@ from typing import Callable
 from config import UI
 from excel_module import (
     run_convert_excel_to_xml,
+    run_delete_unlisted_pdfs,
     run_dzo_insert_to_rdo,
     run_dzo_select_folder_and_process,
     run_insert_to_rdo,
@@ -75,7 +76,7 @@ class IGKNameApp:
         self._create_sidebar_btn(sidebar, "Работа с массивом пакетов", 1, pady=4)
         self._create_sidebar_btn(sidebar, "Работа с одним пакетом ДЗО", 2, pady=4)
 
-        footer_lbl = tk.Label(sidebar, text="Версия 3.2 (Modern UI)", font=UI["font_footer"], bg=UI["bg_sidebar"], fg=UI["muted"])
+        footer_lbl = tk.Label(sidebar, text="Версия 3.3 (Modern UI)", font=UI["font_footer"], bg=UI["bg_sidebar"], fg=UI["muted"])
         footer_lbl.pack(side=tk.BOTTOM, pady=20)
 
         # Main Content
@@ -216,11 +217,13 @@ class IGKNameApp:
             ),
         ).pack(fill=tk.X, pady=(0, 4))
 
+        # Нижний блок кнопок закрепляем у нижнего края ДО таблицы, чтобы он
+        # никогда не выходил за пределы окна (таблица занимает оставшееся место).
+        bottom_cards = tk.Frame(parent, bg=UI["bg_main"])
+        bottom_cards.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
+
         # Раздел с названием "РДО" (Таблица)
         self.dzo_tree = build_dzo_rdo_table_section(parent)
-
-        bottom_cards = tk.Frame(parent, bg=UI["bg_main"])
-        bottom_cards.pack(fill=tk.X, pady=(4, 0))
 
         # Кнопка 3: Перенести список в РДО (Excel)
         ModernNeonCardButton(
@@ -240,6 +243,15 @@ class IGKNameApp:
             subtitle="Преобразовать выбранный Excel файл в формат XML",
             icon="⚙",
             command=lambda: self._launch(run_convert_excel_to_xml),
+        ).pack(fill=tk.X, pady=(0, 4))
+
+        # Кнопка 5: Удаление файлов PDF
+        ModernNeonCardButton(
+            bottom_cards,
+            text="Удаление файлов PDF",
+            subtitle="Удалить PDF из папки, которых нет в списке Excel",
+            icon="🗑",
+            command=lambda: self._launch(run_delete_unlisted_pdfs),
         ).pack(fill=tk.X)
 
     def _launch(self, handler: Callable[[tk.Misc | None], None]) -> None:

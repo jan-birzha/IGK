@@ -1344,3 +1344,155 @@ def run_convert_excel_to_xml(parent: tk.Misc | None = None) -> None:
         )
     except Exception as exc:
         messagebox.showerror("Ошибка", f"Не удалось сохранить XML файл:\n{exc}", parent=dialog_parent(parent))
+
+
+# ==============================================================================
+# УДАЛЕНИЕ PDF-ФАЙЛОВ, ОТСУТСТВУЮЩИХ В СПИСКЕ EXCEL (столбец R, начиная с R15)
+# ==============================================================================
+
+def _normalize_file_name(name: str) -> str:
+    """Приводит имя файла к сопоставимому виду (без учёта регистра и лишних пробелов)."""
+    import unicodedata
+    return unicodedata.normalize("NFC", str(name)).strip().lower()
+
+
+def read_excel_filenames_column_r(excel_path: str) -> set[str]:
+    """
+    Читает наименования файлов из столбца R, начиная с R15 (до конца листа).
+    Возвращает множество нормализованных имён. Для каждого имени добавляется
+    также вариант без расширения .pdf — на случай, если в Excel имя указано без него.
+    """
+    ext = os.path.splitext(excel_path)[1].lower()
+    raw_values: list[str] = []
+
+    if ext == ".xls":
+        try:
+            import xlrd
+        except ImportError:
+            raise RuntimeError(
+                "Для работы с файлами .xls требуется библиотека xlrd.\n"
+                "Установите её командой: pip install xlrd"
+            )
+        wb = xlrd.open_workbook(excel_path)
+        ws = wb.sheet_by_index(0)
+        for r in range(DATA_START_ROW - 1, ws.nrows):
+            if ws.ncols <= R_COLUMN - 1:
+                break
+            text = _cell_text(ws.cell_value(r, R_COLUMN - 1))
+            if text:
+                raw_values.append(text)
+    else:
+        if not HAS_OPENPYXL:
+            raise RuntimeError("Для работы с Excel файлом требуется библиотека openpyxl.")
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
+        try:
+            ws = wb.active
+            for r in range(DATA_START_ROW, (ws.max_row or 0) + 1):
+                text = _cell_text(ws.cell(row=r, column=R_COLUMN).value)
+                if text:
+                    raw_values.append(text)
+        finally:
+            wb.close()
+
+    names: set[str] = set()
+    for value in raw_values:
+        norm = _normalize_file_name(value)
+        names.add(norm)
+        if norm.endswith(".pdf"):
+            names.add(norm[:-4])
+    return names
+
+
+def run_delete_unlisted_pdfs(parent: tk.Misc | None = None) -> None:
+    """
+    Кнопка «Удаление файлов PDF» (вкладка ДЗО).
+    1) Выбор Excel-файла; 2) выбор папки с PDF.
+    PDF, чьё имя есть в столбце R (с R15) — остаются, остальные — удаляются.
+    """
+    excel_path = filedialog.askopenfilename(
+        parent=dialog_parent(parent),
+        title="Шаг 1 из 2: Выберите Excel файл с наименованиями файлов",
+        filetypes=[("Excel Files", "*.xlsx *.xlsm *.xls")],
+    )
+    if not excel_path:
+        return
+
+    folder_path = filedialog.askdirectory(
+        parent=dialog_parent(parent),
+        title="Шаг 2 из 2: Выберите папку с файлами PDF",
+    )
+    if not folder_path:
+        return
+
+    try:
+        listed_names = read_excel_filenames_column_r(excel_path)
+    except Exception as exc:
+        messagebox.showerror("Ошибка", f"Не удалось прочитать данные из Excel:\n{exc}", parent=dialog_parent(parent))
+        return
+
+    if not listed_names:
+        messagebox.showwarning(
+            "Внимание",
+            "В выбранном Excel-файле нет наименований файлов в столбце R (начиная с R15).\n"
+            "Удаление отменено.",
+            parent=dialog_parent(parent),
+        )
+        return
+
+    pdf_files = collect_files_with_extensions_recursive(folder_path, {".pdf"})
+    if not pdf_files:
+        messagebox.showwarning("Внимание", "В выбранной папке нет файлов PDF.", parent=dialog_parent(parent))
+        return
+
+    to_keep: list[str] = []
+    to_delete: list[str] = []
+    for path in pdf_files:
+        base = _normalize_file_name(os.path.basename(path))
+        stem = _normalize_file_name(os.path.splitext(os.path.basename(path))[0])
+        if base in listed_names or stem in listed_names:
+            to_keep.append(path)
+        else:
+            to_delete.append(path)
+
+    if not to_delete:
+        messagebox.showinfo(
+            "Готово",
+            f"Удалять нечего: все файлы PDF ({len(to_keep)}) есть в списке Excel.",
+            parent=dialog_parent(parent),
+        )
+        return
+
+    warning_zero = ""
+    if not to_keep:
+        warning_zero = "\n\nВНИМАНИЕ: ни один PDF не совпал со списком — будут удалены ВСЕ PDF!"
+
+    proceed = messagebox.askyesno(
+        "Подтверждение удаления",
+        f"Найдено файлов PDF: {len(pdf_files)}\n"
+        f"Останется (есть в Excel): {len(to_keep)}\n"
+        f"Будет удалено (нет в Excel): {len(to_delete)}\n\n"
+        f"Удаление необратимо. Продолжить?{warning_zero}",
+        icon="warning",
+        parent=dialog_parent(parent),
+    )
+    if not proceed:
+        return
+
+    deleted = 0
+    errors: list[str] = []
+    for path in to_delete:
+        try:
+            os.remove(path)
+            deleted += 1
+        except Exception as exc:
+            errors.append(f"{os.path.basename(path)}: {exc}")
+
+    summary = f"Удалено файлов PDF: {deleted}\nОсталось файлов PDF: {len(to_keep)}"
+    if errors:
+        messagebox.showwarning(
+            "Готово с предупреждениями",
+            summary + "\n\nНе удалось удалить:\n" + "\n".join(errors),
+            parent=dialog_parent(parent),
+        )
+    else:
+        messagebox.showinfo("Готово", summary, parent=dialog_parent(parent))
